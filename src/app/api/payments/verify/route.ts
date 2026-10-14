@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { authOptions } from "@/lib/auth";
 import { logAccess } from "@/lib/access";
+import crypto from "crypto";
 
 // POST /api/payments/verify
 // Body: { paymentId: string, providerPaymentId: string, providerSignature: string }
@@ -126,8 +127,6 @@ export async function POST(req: Request) {
 }
 
 function makeSig(data: string, secret: string): string {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const crypto = require("crypto");
   return crypto
     .createHmac("sha256", secret)
     .update(data)

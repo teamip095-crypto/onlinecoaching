@@ -16,7 +16,7 @@ model User {
   phone        String   @unique
   name         String
   passwordHash String
-  role         String   @default("STUDENT") // STUDENT | FACULTY | ADMIN
+  role         String   @default("STUDENT") // STUDENT | FACULTY | COACHING_OWNER | SUPER_ADMIN
   rollNo       String?
   avatarText   String?
   className    String?
@@ -26,9 +26,11 @@ model User {
   avgScore     Int      @default(0)
   rank         Int      @default(0)
   isBlocked    Boolean  @default(false)
+  coachingId   String?  // white-label tenant
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
+  coaching     Coaching? @relation(fields: [coachingId], references: [id], onDelete: SetNull)
   enrollments  Enrollment[]
   payments     Payment[]
   doubtsAsked  Doubt[]
@@ -36,6 +38,28 @@ model User {
   testAttempts TestAttempt[]
   accessLogs   AccessLog[]
   sessions     UserSession[]
+}
+
+// White-label tenant — each coaching institute is a separate tenant
+model Coaching {
+  id           String   @id @default(cuid())
+  name         String   // e.g. "Sharma Physics Classes"
+  slug         String   @unique // subdomain key, e.g. "sharma-physics"
+  tagline      String?
+  logoText     String? // 2-letter logo e.g. "SP"
+  primaryColor String? @default("#6d28d9") // purple
+  ownerEmail   String?
+  ownerPhone   String?
+  plan         String   @default("TRIAL") // TRIAL | STARTER | PRO | ENTERPRISE
+  maxStudents  Int      @default(50)
+  maxFaculty   Int      @default(3)
+  isActive     Boolean  @default(true)
+  expiresAt    DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  users        User[]
+  courses      Course[]
 }
 
 model Course {
@@ -54,9 +78,11 @@ model Course {
   price        Int      @default(0) // in paise (INR)
   badge        String?
   isPublished  Boolean  @default(true)
+  coachingId   String?  // tenant
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
+  coaching     Coaching? @relation(fields: [coachingId], references: [id], onDelete: SetNull)
   enrollments  Enrollment[]
   lectures     Lecture[]
   materials    StudyMaterial[]

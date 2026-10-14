@@ -1,4 +1,5 @@
 import { db } from "./db";
+import crypto from "crypto";
 
 export const ACCESS_DENIED_REASONS = {
   NOT_ENROLLED: "NOT_ENROLLED",
@@ -116,11 +117,8 @@ export function verifySignedContentToken(
   }
 }
 
-// Tiny string-hash (NOT crypto-secure; use Node's crypto in production)
+// Tiny string-hash (uses Node's crypto for HMAC)
 function simpleHmac(data: string, secret: string): string {
-  // Use node crypto via dynamic require to keep this isomorphic
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const crypto = require("crypto");
   return crypto
     .createHmac("sha256", secret)
     .update(data)

@@ -1,8 +1,5 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+// Prisma schema for Online Coaching App — full-stack with security
+// All content (lectures, materials, tests) is gated by Enrollment + Payment verification
 
 generator client {
   provider = "prisma-client-js"
@@ -14,19 +11,222 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id           String   @id @default(cuid())
+  email        String   @unique
+  phone        String   @unique
+  name         String
+  passwordHash String
+  role         String   @default("STUDENT") // STUDENT | FACULTY | ADMIN
+  rollNo       String?
+  avatarText   String?
+  className    String?
+  batchName    String?
+  streak       Int      @default(0)
+  attendance   Int      @default(0)
+  avgScore     Int      @default(0)
+  rank         Int      @default(0)
+  isBlocked    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  enrollments  Enrollment[]
+  payments     Payment[]
+  doubtsAsked  Doubt[]
+  doubtsAnswered DoubtAnswer[]
+  testAttempts TestAttempt[]
+  accessLogs   AccessLog[]
+  sessions     UserSession[]
 }
 
-model Post {
-  id        String   @id @default(cuid())
-  title     String
-  content   String?
-  published Boolean  @default(false)
-  authorId  String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+model Course {
+  id           String   @id @default(cuid())
+  title        String
+  slug         String   @unique
+  description  String
+  subject      String
+  facultyId    String
+  facultyName  String
+  facultyAvatar String?
+  thumbnailKey String?
+  totalLessons Int      @default(0)
+  students     Int      @default(0)
+  rating       Float    @default(0)
+  price        Int      @default(0) // in paise (INR)
+  badge        String?
+  isPublished  Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  enrollments  Enrollment[]
+  lectures     Lecture[]
+  materials    StudyMaterial[]
+  tests        Test[]
+}
+
+model Enrollment {
+  id            String   @id @default(cuid())
+  userId        String
+  courseId      String
+  status        String   @default("PENDING") // PENDING | ACTIVE | EXPIRED | CANCELLED
+  enrolledAt    DateTime @default(now())
+  expiresAt     DateTime?
+  progress      Int      @default(0)
+  completedLessons Int   @default(0)
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course        Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, courseId])
+}
+
+model Payment {
+  id            String   @id @default(cuid())
+  userId        String
+  courseId      String?
+  amount        Int      // in paise
+  currency      String   @default("INR")
+  status        String   @default("CREATED") // CREATED | PAID | FAILED | REFUNDED
+  provider      String   @default("RAZORPAY")
+  providerOrderId String?
+  providerPaymentId String?
+  providerSignature String?
+  receipt       String?
+  notes         String?
+  createdAt     DateTime @default(now())
+  verifiedAt    DateTime?
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Lecture {
+  id           String   @id @default(cuid())
+  courseId      String
+  title        String
+  description  String
+  subject      String
+  facultyName  String
+  type         String   @default("VIDEO") // VIDEO | LIVE | RECORDED
+  status       String   @default("UPCOMING") // LIVE | UPCOMING | COMPLETED | SCHEDULED
+  startTime    DateTime?
+  duration     Int      @default(0) // minutes
+  videoUrl     String?  // protected URL
+  thumbnailKey String?
+  attendees    Int      @default(0)
+  isPreview    Boolean  @default(false) // free preview lecture
+  createdAt    DateTime @default(now())
+
+  course        Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+}
+
+model StudyMaterial {
+  id           String   @id @default(cuid())
+  courseId      String
+  title        String
+  type         String   // PDF | VIDEO | NOTE | DPP
+  subject      String
+  facultyName  String
+  fileUrl      String?  // protected URL
+  fileSize     String?
+  duration     String?
+  isPreview    Boolean  @default(false)
+  isNew        Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  course        Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+}
+
+model Test {
+  id           String   @id @default(cuid())
+  courseId      String
+  title        String
+  subject      String
+  totalQuestions Int
+  duration     Int      // minutes
+  marks        Int
+  difficulty   String   @default("MEDIUM")
+  startDate    DateTime
+  endDate     DateTime
+  isPreview    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  course        Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  attempts      TestAttempt[]
+}
+
+model TestAttempt {
+  id           String   @id @default(cuid())
+  userId       String
+  testId       String
+  score        Int?
+  rank         Int?
+  totalAttempts Int?
+  status       String   @default("AVAILABLE") // AVAILABLE | IN_PROGRESS | SUBMITTED | EXPIRED
+  startedAt    DateTime @default(now())
+  submittedAt  DateTime?
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  test          Test     @relation(fields: [testId], references: [id], onDelete: Cascade)
+}
+
+model Doubt {
+  id           String   @id @default(cuid())
+  userId       String
+  subject      String
+  question     String
+  attachments  String?  // JSON array
+  status       String   @default("PENDING") // PENDING | ANSWERED
+  helpfulCount Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  answers       DoubtAnswer[]
+}
+
+model DoubtAnswer {
+  id           String   @id @default(cuid())
+  doubtId      String
+  userId       String   // faculty user id
+  answer       String
+  createdAt    DateTime @default(now())
+
+  doubt         Doubt    @relation(fields: [doubtId], references: [id], onDelete: Cascade)
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model UserSession {
+  id           String   @id @default(cuid())
+  userId       String
+  token        String   @unique // hashed session token
+  userAgent    String?
+  ipAddress    String?
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+  revokedAt    DateTime?
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model AccessLog {
+  id           String   @id @default(cuid())
+  userId       String?
+  resourceType String   // LECTURE | MATERIAL | TEST | COURSE
+  resourceId   String
+  action       String   // VIEW | DOWNLOAD | ATTEMPT
+  ipAddress    String?
+  userAgent    String?
+  allowed      Boolean  @default(true)
+  reason       String?  // if denied, why
+  createdAt    DateTime @default(now())
+
+  user          User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+model Notification {
+  id           String   @id @default(cuid())
+  userId       String?
+  title        String
+  message      String
+  type         String   // CLASS | TEST | MATERIAL | DOUBT | PAYMENT
+  isRead       Boolean  @default(false)
+  createdAt    DateTime @default(now())
 }

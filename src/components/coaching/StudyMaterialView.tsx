@@ -1,10 +1,9 @@
 "use client";
 
-import { StudyMaterial, subjectColors, thumbnailColors } from "@/lib/coaching-data";
+import { StudyMaterial, subjectColors } from "@/lib/coaching-data";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { useState } from "react";
 import {
   FileText,
   Video,
@@ -12,12 +11,18 @@ import {
   FileSpreadsheet,
   Download,
   Play,
-  Search,
-  Filter,
+  Lock,
+  Loader2,
 } from "lucide-react";
+import { useEffect, useState } from "react";
 
 type Props = {
-  materials: StudyMaterial[];
+  // Optional: if courseId passed, show only that course's materials (fetched from API)
+  courseId?: string;
+  // Fallback: pass materials directly (legacy)
+  materials?: StudyMaterial[];
+  // User's enrolled+paid course IDs (for showing lock vs unlock)
+  paidCourseIds?: Set<string>;
 };
 
 const typeMeta: Record<
@@ -30,135 +35,157 @@ const typeMeta: Record<
   dpp: { icon: FileSpreadsheet, label: "DPP Sheet", bg: "bg-emerald-100 dark:bg-emerald-950/40", text: "text-emerald-600 dark:text-emerald-300" },
 };
 
-export function StudyMaterialView({ materials }: Props) {
-  const [filter, setFilter] = useState<"all" | StudyMaterial["type"]>("all");
-  const [query, setQuery] = useState("");
+export function StudyMaterialView({ courseId, materials: staticMats, paidCourseIds }: Props) {
+  const [materials, setMaterials] = useState<StudyMaterial[]>(
+    staticMats ?? []
+  );
+  const [loading, setLoading] = useState(!staticMats);
+  const [error, setError] = useState<string | null>(null);
 
-  const filtered = materials.filter((m) => {
-    if (filter !== "all" && m.type !== filter) return false;
-    if (query && !m.title.toLowerCase().includes(query.toLowerCase())) return false;
-    return true;
-  });
+  useEffect(() => {
+    if (!courseId || staticMats) return;
+    (async () => {
+      setLoading(true);
+      try {
+        const r = await fetch(`/api/materials?courseId=${courseId}`, {
+          credentials: "include",
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error ?? "Failed");
+        // Map API response to component's expected shape
+        const list: StudyMaterial[] = (data.materials ?? []).map((m: any) => ({
+          id: m.id,
+          title: m.title,
+          type: m.type.toLowerCase(),
+          subject: m.subject,
+          faculty: m.facultyName,
+          size: m.fileSize ?? "",
+          duration: m.duration ?? undefined,
+          uploadedAt: timeAgo(new Date(m.createdAt)),
+          isNew: m.isNew,
+          isPreview: m.isPreview,
+          thumbnail: m.subject.toLowerCase(),
+        }));
+        setMaterials(list);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed");
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [courseId, staticMats]);
 
-  const subjectList = Array.from(new Set(materials.map((m) => m.subject)));
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <h1 className="text-2xl font-bold">Study Material</h1>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="h-40 bg-muted animate-pulse rounded-lg" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <Card className="p-6 text-center">
+        <p className="text-sm text-rose-600">{error}</p>
+      </Card>
+    );
+  }
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-start justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Study Material</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Notes, DPP sheets, video lectures & previous year papers — all in one place.
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Study Material</h1>
+        <p className="text-sm text-muted-foreground mt-0.5">
+          {materials.length} materials • All downloads are watermarked &
+          enrollment-protected
+        </p>
+      </div>
+
+      {materials.length === 0 ? (
+        <Card className="p-12 text-center">
+          <FileText className="h-12 w-12 mx-auto text-muted-foreground" />
+          <h3 className="font-semibold mt-3">No materials yet</h3>
+          <p className="text-sm text-muted-foreground mt-1">
+            Faculty uploads will appear here.
           </p>
-        </div>
-      </div>
-
-      {/* Search + filter bar */}
-      <Card className="p-3">
-        <div className="flex flex-col sm:flex-row gap-2">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search materials..."
-              className="w-full h-9 pl-9 pr-3 rounded-md bg-muted/50 border-0 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-            />
-          </div>
-          <div className="flex items-center gap-2 overflow-x-auto scrollbar-thin">
-            <Filter className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-            {(["all", "pdf", "video", "note", "dpp"] as const).map((t) => {
-              const Icon = t === "all" ? Filter : typeMeta[t].icon;
-              return (
-                <Button
-                  key={t}
-                  size="sm"
-                  variant={filter === t ? "default" : "outline"}
-                  className="h-8 rounded-full text-xs whitespace-nowrap"
-                  onClick={() => setFilter(t)}
-                >
-                  <Icon className="h-3 w-3 mr-1" />
-                  {t === "all" ? "All" : typeMeta[t].label}
-                </Button>
-              );
-            })}
-          </div>
-        </div>
-      </Card>
-
-      {/* Subject chips */}
-      <div className="flex items-center gap-2 overflow-x-auto scrollbar-thin pb-1">
-        <span className="text-xs text-muted-foreground shrink-0 font-medium">Subjects:</span>
-        {subjectList.map((s) => {
-          const style = subjectColors[s] ?? subjectColors.Science;
-          return (
-            <Badge key={s} className={`${style.bg} ${style.text} hover:${style.bg} rounded-full whitespace-nowrap`}>
-              {s}
-            </Badge>
-          );
-        })}
-      </div>
-
-      {/* Materials grid */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {filtered.map((m) => {
-          const meta = typeMeta[m.type];
-          const Icon = meta.icon;
-          const thumbClass = thumbnailColors[m.thumbnail] ?? "from-violet-500 to-violet-700";
-
-          return (
-            <Card key={m.id} className="overflow-hidden p-0 hover:shadow-md transition-shadow">
-              <div className={`relative h-24 bg-gradient-to-br ${thumbClass} flex items-center justify-center`}>
-                <Icon className="h-8 w-8 text-white/90" />
-                {m.isNew && (
-                  <Badge className="absolute top-2 right-2 bg-rose-500 hover:bg-rose-500 text-white text-[9px] font-bold">
-                    NEW
-                  </Badge>
-                )}
-                {m.type === "video" && (
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <div className="h-9 w-9 rounded-full bg-white/90 flex items-center justify-center">
-                      <Play className="h-4 w-4 fill-primary text-primary ml-0.5" />
-                    </div>
-                  </div>
-                )}
-              </div>
-              <div className="p-3 space-y-2">
-                <div className="flex items-center gap-2">
+        </Card>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {materials.map((m) => {
+            const meta = typeMeta[m.type] ?? typeMeta.note;
+            const Icon = meta.icon;
+            const style = subjectColors[m.subject] ?? subjectColors.Science;
+            // Determine access: if material has isPreview=false and the user isn't paid → show locked
+            const isLocked = !m.isPreview && paidCourseIds && !paidCourseIds.has(m.courseId ?? "");
+            return (
+              <Card key={m.id} className="overflow-hidden p-0">
+                <div className={`relative h-24 ${style.bg} flex items-center justify-center`}>
+                  <Icon className={`h-8 w-8 ${style.text}`} />
+                  {m.isNew && (
+                    <Badge className="absolute top-2 right-2 bg-rose-500 hover:bg-rose-500 text-white text-[9px] font-bold">
+                      NEW
+                    </Badge>
+                  )}
+                  {isLocked && (
+                    <Badge className="absolute top-2 left-2 bg-amber-500 hover:bg-amber-500 text-white text-[9px] font-bold">
+                      <Lock className="h-2 w-2 mr-1" />
+                      LOCKED
+                    </Badge>
+                  )}
+                  {m.isPreview && (
+                    <Badge className="absolute top-2 left-2 bg-emerald-500 hover:bg-emerald-500 text-white text-[9px] font-bold">
+                      FREE
+                    </Badge>
+                  )}
+                </div>
+                <div className="p-3 space-y-2">
                   <Badge className={`${meta.bg} ${meta.text} hover:${meta.bg} text-[9px]`}>
-                    <Icon className="h-2.5 w-2.5 mr-1" />
                     {meta.label}
                   </Badge>
-                  <span className="text-[10px] text-muted-foreground">{m.uploadedAt}</span>
-                </div>
-                <p className="text-sm font-medium leading-snug line-clamp-2 min-h-[2.5rem]">
-                  {m.title}
-                </p>
-                <div className="flex items-center justify-between pt-1 border-t border-border">
-                  <div className="text-[10px] text-muted-foreground">
-                    <p className="font-medium text-foreground">{m.faculty}</p>
-                    <p>{m.subject}{m.size ? ` • ${m.size}` : m.duration ? ` • ${m.duration}` : ""}</p>
-                  </div>
-                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0">
-                    {m.type === "video" ? (
-                      <Play className="h-3.5 w-3.5" />
+                  <p className="text-sm font-medium leading-snug line-clamp-2 min-h-[2.5rem]">
+                    {m.title}
+                  </p>
+                  <div className="flex items-center justify-between pt-1 border-t border-border">
+                    <div className="text-[10px] text-muted-foreground">
+                      <p className="font-medium text-foreground">{m.faculty}</p>
+                      <p>{m.subject}{m.size ? ` • ${m.size}` : m.duration ? ` • ${m.duration}` : ""}</p>
+                    </div>
+                    {isLocked ? (
+                      <Button size="sm" variant="ghost" className="h-7 text-xs text-amber-600" disabled>
+                        <Lock className="h-3 w-3" />
+                      </Button>
                     ) : (
-                      <Download className="h-3.5 w-3.5" />
+                      <a href={`/api/files/${m.id}`} target="_blank" rel="noreferrer" download={false}>
+                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0">
+                          {m.type === "video" ? (
+                            <Play className="h-3.5 w-3.5" />
+                          ) : (
+                            <Download className="h-3.5 w-3.5" />
+                          )}
+                        </Button>
+                      </a>
                     )}
-                  </Button>
+                  </div>
                 </div>
-              </div>
-            </Card>
-          );
-        })}
-      </div>
-
-      {filtered.length === 0 && (
-        <Card className="p-12 text-center">
-          <p className="text-sm text-muted-foreground">No materials match your search.</p>
-        </Card>
+              </Card>
+            );
+          })}
+        </div>
       )}
     </div>
   );
+}
+
+function timeAgo(d: Date): string {
+  const diff = Date.now() - d.getTime();
+  const h = Math.floor(diff / 3600_000);
+  if (h < 1) return "Just now";
+  if (h < 24) return `${h} hours ago`;
+  const days = Math.floor(h / 24);
+  if (days < 7) return `${days} day${days > 1 ? "s" : ""} ago`;
+  return d.toLocaleDateString();
 }

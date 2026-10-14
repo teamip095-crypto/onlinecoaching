@@ -135,8 +135,8 @@ model Lecture {
   status       String   @default("UPCOMING") // LIVE | UPCOMING | COMPLETED | SCHEDULED
   startTime    DateTime?
   duration     Int      @default(0) // minutes
-  videoUrl     String?  // protected URL
-  thumbnailKey String?
+  videoUrl     String?  // protected URL (e.g. /api/files/{fileId})
+  thumbnailKey String?  // also stores local file path for uploaded videos
   attendees    Int      @default(0)
   isPreview    Boolean  @default(false) // free preview lecture
   createdAt    DateTime @default(now())
@@ -151,14 +151,29 @@ model StudyMaterial {
   type         String   // PDF | VIDEO | NOTE | DPP
   subject      String
   facultyName  String
-  fileUrl      String?  // protected URL
+  fileUrl      String?  // protected URL (e.g. /api/files/{fileId})
   fileSize     String?
   duration     String?
+  thumbnailKey String?  // local file path for uploaded files
   isPreview    Boolean  @default(false)
   isNew        Boolean  @default(false)
   createdAt    DateTime @default(now())
 
   course        Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+}
+
+// Tracks every uploaded file on disk for audit + access control
+model UploadedFile {
+  id           String   @id @default(cuid())
+  fileId       String   @unique // short hex id used in /api/files/[id]
+  uploaderId   String
+  originalName String
+  mimeType     String
+  size         Int
+  storagePath  String   // relative path under /uploads
+  resourceType String   // LECTURE | MATERIAL
+  resourceId   String?  // ID of the lecture/material record
+  createdAt    DateTime @default(now())
 }
 
 model Test {

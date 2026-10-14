@@ -49,7 +49,9 @@ export type StudyMaterial = {
   duration?: string;
   uploadedAt: string;
   isNew?: boolean;
+  isPreview?: boolean;
   thumbnail: string;
+  courseId?: string;
 };
 
 export type TestSeries = {

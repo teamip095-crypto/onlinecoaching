@@ -44,9 +44,16 @@ export async function POST(req: Request) {
   }
   // Demo "signature verification" — in production: compare against HMAC
   // of (providerOrderId|providerPaymentId) using Razorpay key_secret
+  const secret = process.env.NEXTAUTH_SECRET;
+  if (!secret) {
+    return NextResponse.json(
+      { error: "Server not configured (NEXTAUTH_SECRET missing)" },
+      { status: 500 }
+    );
+  }
   const expectedSig = makeSig(
     `${payment.providerOrderId}|${providerPaymentId}`,
-    process.env.NEXTAUTH_SECRET ?? "dev-secret"
+    secret
   );
   if (providerSignature !== expectedSig && providerSignature !== "demo_signature") {
     await db.payment.update({

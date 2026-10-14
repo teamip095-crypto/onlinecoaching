@@ -211,14 +211,6 @@ export function AuthScreen() {
                   : "← Already have an account? Login"}
               </button>
             </div>
-
-            {/* Demo credentials helper */}
-            <div className="mt-4 p-3 rounded-md bg-muted/60 border border-border text-[10px] text-muted-foreground">
-              <p className="font-semibold mb-1">Demo logins (try it):</p>
-              <p>• <b>Aarav (paid student)</b> — aarav@student.com / student123</p>
-              <p>• <b>New student (unpaid)</b> — free@student.com / student123</p>
-              <p>• <b>Faculty</b> — aman.faculty@coaching.in / faculty123</p>
-            </div>
           </Card>
         </div>
       </main>

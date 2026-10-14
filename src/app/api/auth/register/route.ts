@@ -63,6 +63,19 @@ export async function POST(req: Request) {
       .slice(0, 2)
       .toUpperCase();
 
+    // Auto-promote the very first sign-up to SUPER_ADMIN so the platform
+    // can be bootstrapped. Subsequent sign-ups default to STUDENT.
+    // In production, you can also set SUPER_ADMIN_EMAIL env var to restrict
+    // which email becomes admin.
+    const userCount = await db.user.count();
+    const adminEmail = process.env.SUPER_ADMIN_EMAIL;
+    const role =
+      userCount === 0
+        ? "SUPER_ADMIN"
+        : adminEmail && email.toLowerCase() === adminEmail.toLowerCase()
+          ? "SUPER_ADMIN"
+          : "STUDENT";
+
     const user = await db.user.create({
       data: {
         email: email.toLowerCase(),
@@ -73,13 +86,14 @@ export async function POST(req: Request) {
         className: className ?? null,
         batchName: batchName ?? null,
         avatarText,
-        role: "STUDENT",
+        role,
       },
     });
 
     return NextResponse.json({
       ok: true,
       userId: user.id,
+      role: user.role,
       message: "Account created. Please login.",
     });
   } catch (err) {

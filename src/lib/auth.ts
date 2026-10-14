@@ -100,5 +100,15 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
   },
-  secret: process.env.NEXTAUTH_SECRET ?? "dev-only-secret-change-in-production-please",
+  // No hardcoded fallback — NEXTAUTH_SECRET must be set in environment.
+  // The app will throw at runtime if the env var is missing.
+  secret: (() => {
+    const s = process.env.NEXTAUTH_SECRET;
+    if (!s) {
+      throw new Error(
+        "NEXTAUTH_SECRET environment variable is not set. Refusing to start with weak security."
+      );
+    }
+    return s;
+  })(),
 };

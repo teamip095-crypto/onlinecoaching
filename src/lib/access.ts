@@ -89,8 +89,7 @@ export function createSignedContentToken(payload: {
   const ttl = payload.ttlSec ?? 300; // 5 min default
   const expiresAt = Date.now() + ttl * 1000;
   const data = `${payload.userId}|${payload.resourceId}|${payload.type}|${expiresAt}`;
-  // Simple base64 + HMAC (use proper JWT in production)
-  const secret = process.env.NEXTAUTH_SECRET ?? "dev-secret";
+  const secret = requireSecret();
   const token = Buffer.from(
     `${data}.${simpleHmac(data, secret)}`
   ).toString("base64url");
@@ -108,7 +107,7 @@ export function verifySignedContentToken(
     const expiresAt = Number(expiresAtStr);
     if (!userId || !resourceId || !type || !expiresAt) return null;
     if (Date.now() > expiresAt) return null;
-    const secret = process.env.NEXTAUTH_SECRET ?? "dev-secret";
+    const secret = requireSecret();
     const expectedSig = simpleHmac(data, secret);
     if (sig !== expectedSig) return null;
     return { userId, resourceId, type, expiresAt };
@@ -117,7 +116,18 @@ export function verifySignedContentToken(
   }
 }
 
-// Tiny string-hash (uses Node's crypto for HMAC)
+// Require NEXTAUTH_SECRET — no hardcoded fallback allowed.
+function requireSecret(): string {
+  const s = process.env.NEXTAUTH_SECRET;
+  if (!s) {
+    throw new Error(
+      "NEXTAUTH_SECRET environment variable is required. Refusing to use weak security."
+    );
+  }
+  return s;
+}
+
+// HMAC using Node crypto (sha256)
 function simpleHmac(data: string, secret: string): string {
   return crypto
     .createHmac("sha256", secret)

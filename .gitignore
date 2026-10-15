@@ -52,3 +52,19 @@ prompt
 server.log
 # Skills directory
 /skills/
+# Sensitive env files (NEVER commit)
+.env
+.env.*
+!.env.example
+
+# Local uploads (user-generated content, never commit)
+/uploads/
+/db/
+*.db
+*.db-journal
+
+# Generated PDFs
+/invoices/
+
+# OS files
+Thumbs.db

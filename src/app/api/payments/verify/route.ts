@@ -4,6 +4,9 @@ import { db } from "@/lib/db";
 import { authOptions } from "@/lib/auth";
 import { logAccess } from "@/lib/access";
 import crypto from "crypto";
+import { generateOtp } from "@/lib/otp";
+import { sendOtpWhatsapp, sendInvoiceWhatsapp } from "@/lib/whatsapp";
+import { buildInvoice, invoiceToText, generateInvoiceNumber } from "@/lib/invoice";
 
 // POST /api/payments/verify
 // Body: { paymentId: string, providerPaymentId: string, providerSignature: string }
@@ -118,6 +121,41 @@ export async function POST(req: Request) {
       type: "PAYMENT",
     },
   });
+
+  // Generate invoice + send via WhatsApp
+  const student = await db.user.findUnique({
+    where: { id: session.user.id },
+    select: { phone: true, name: true, email: true },
+  });
+  let invoiceNumber = generateInvoiceNumber();
+  if (student) {
+    const invoice = buildInvoice({
+      studentName: student.name ?? "Student",
+      studentEmail: student.email,
+      studentPhone: student.phone,
+      courseTitle: payment.course?.title ?? "Course",
+      courseId: payment.courseId ?? "unknown",
+      amountPaise: payment.amount,
+      transactionId: providerPaymentId,
+      upiId: "9301056006@upi",
+    });
+    invoiceNumber = invoice.number;
+    const invoiceText = invoiceToText(invoice);
+    // Best-effort send via WhatsApp (no-op if env not configured)
+    await sendInvoiceWhatsapp(student.phone, invoice).catch(() => {});
+    // Also store the invoice text on the payment record (notes column)
+    await db.payment.update({
+      where: { id: payment.id },
+      data: { notes: invoiceText.slice(0, 1000) },
+    });
+  }
+
+  // Send OTP for device verification (next step after payment)
+  if (student) {
+    const { code, expiresAt } = generateOtp(session.user.id, "PAYMENT", payment.id);
+    await sendOtpWhatsapp(student.phone, code, "Activate Enrollment").catch(() => {});
+  }
+
   await logAccess({
     userId: session.user.id,
     resourceType: "COURSE",
@@ -129,7 +167,10 @@ export async function POST(req: Request) {
   return NextResponse.json({
     ok: true,
     courseId: payment.courseId,
-    message: "Payment verified. Enrollment activated.",
+    invoiceNumber,
+    message: "Payment verified. Invoice sent via WhatsApp. Please complete OTP verification to activate enrollment.",
+    otpRequired: true,
+    paymentId: payment.id,
   });
 }
 

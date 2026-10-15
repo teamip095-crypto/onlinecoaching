@@ -45,6 +45,7 @@ import { ContentGuard } from "@/components/coaching/ContentGuard";
 import { Watermark } from "@/components/coaching/Watermark";
 import { FacultyDashboard } from "@/components/coaching/FacultyDashboard";
 import { CoachingSetup } from "@/components/coaching/CoachingSetup";
+import { SecurityBadge } from "@/components/coaching/SecurityBadge";
 
 type ExtendedSection = SectionId | "faculty" | "setup";
 type NotificationsData = {
@@ -248,6 +249,8 @@ export default function Home() {
             </div>
 
             <div className="flex items-center gap-1">
+              <SecurityBadge compact={!false} showLabel={true} />
+
               <Button
                 variant="ghost"
                 size="sm"

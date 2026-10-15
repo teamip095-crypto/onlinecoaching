@@ -107,6 +107,98 @@ export function ContentGuard({ children, onDevtoolsOpen, blurOnDevtools = true }
     return () => clearInterval(interval);
   }, [devtoolsOpen, onDevtoolsOpen]);
 
+  // 6b. Iframe buster — if this app is embedded in an iframe, escape to top
+  useEffect(() => {
+    try {
+      if (window.top !== window.self) {
+        // We're being framed — force the top window to load our app
+        window.top!.location.href = window.self.location.href;
+      }
+    } catch {
+      // Cross-origin iframe access throws — that's also a sign of being framed.
+      // Use a fallback: hide all content (CSS) and show a warning.
+      const style = document.createElement("style");
+      style.id = "guard-frame-block";
+      style.textContent = `body { display: none !important; }`;
+      document.head.appendChild(style);
+      // Try to escape via link
+      const a = document.createElement("a");
+      a.href = window.self.location.href;
+      a.target = "_top";
+      a.innerText = "Open in new tab";
+      document.body.innerHTML = "";
+      document.body.appendChild(a);
+    }
+  }, []);
+
+  // 6c. Canvas tamper detection — if someone tries to render our content
+  // to a canvas (for screenshot bypass), paint a watermark on the canvas
+  useEffect(() => {
+    const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+    const origToBlob = HTMLCanvasElement.prototype.toBlob;
+    const origCaptureStream = HTMLCanvasElement.prototype.captureStream;
+    const block = () => {
+      throw new Error("Canvas capture disabled for content protection");
+    };
+    HTMLCanvasElement.prototype.toDataURL = function (...args: unknown[]) {
+      // Allow blank canvases (used by Next.js dev), but block any canvas that
+      // has been drawn on (likely content capture attempts)
+      try {
+        const ctx = this.getContext("2d");
+        if (ctx) {
+          const data = ctx.getImageData(0, 0, 1, 1);
+          if (data.data[3] > 0) {
+            block();
+          }
+        }
+      } catch {
+        block();
+      }
+      return origToDataURL.apply(this, args as [unknown, ...unknown[]]);
+    } as typeof HTMLCanvasElement.prototype.toDataURL;
+    HTMLCanvasElement.prototype.toBlob = function (...args: unknown[]) {
+      try {
+        const ctx = this.getContext("2d");
+        if (ctx) {
+          const data = ctx.getImageData(0, 0, 1, 1);
+          if (data.data[3] > 0) block();
+        }
+      } catch {
+        block();
+      }
+      return origToBlob.apply(this, args as [unknown, ...unknown[]]);
+    } as typeof HTMLCanvasElement.prototype.toBlob;
+    if (origCaptureStream) {
+      HTMLCanvasElement.prototype.captureStream = function (...args: unknown[]) {
+        block();
+        return origCaptureStream.apply(this, args as [unknown, ...unknown[]]);
+      } as typeof HTMLCanvasElement.prototype.captureStream;
+    }
+    return () => {
+      HTMLCanvasElement.prototype.toDataURL = origToDataURL;
+      HTMLCanvasElement.prototype.toBlob = origToBlob;
+      if (origCaptureStream) {
+        HTMLCanvasElement.prototype.captureStream = origCaptureStream;
+      }
+    };
+  }, []);
+
+  // 6d. Detect screen-capture attempt via getDisplayMedia (browser screen-share API)
+  useEffect(() => {
+    const orig = navigator.mediaDevices?.getDisplayMedia;
+    if (!orig) return;
+    navigator.mediaDevices.getDisplayMedia = async function (...args) {
+      // Block screen capture of our content
+      setScreenshotWarning(true);
+      throw new DOMException("Screen capture is disabled for protected content", "NotAllowedError");
+    } as typeof navigator.mediaDevices.getDisplayMedia;
+    return () => {
+      if (navigator.mediaDevices) {
+        navigator.mediaDevices.getDisplayMedia = orig;
+      }
+    };
+  }, []);
+
   // 9. Screen-capture detection
   useEffect(() => {
     let stream: MediaStream | null = null;

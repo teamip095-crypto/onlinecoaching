@@ -3,13 +3,18 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { authOptions } from "@/lib/auth";
 import { hasAccessToCourse, logAccess } from "@/lib/access";
-import { readFile } from "fs/promises";
-import path from "path";
+import { getSupabaseServer, createSignedDownloadUrl } from "@/lib/supabase-server";
 
 export const runtime = "nodejs";
 
-// GET /api/files/[id] - serve uploaded file ONLY if user is logged in + enrolled+paid
-// This is the hard security gate: no enrollment+payment = no file bytes
+// GET /api/files/[id] - stream/serve uploaded file from Supabase Storage
+// Hard security: requires login + paid enrollment (unless file is preview)
+//
+// Two modes:
+//   1. Range request (video streaming): proxy bytes from Supabase with
+//      Content-Range support so <video> can seek
+//   2. Full request: redirect to short-lived signed URL (5min TTL) OR
+//      proxy bytes directly
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -72,7 +77,7 @@ export async function GET(
       );
     }
   }
-  // OK to serve
+  // OK to serve — log the access
   await logAccess({
     userId: session.user.id,
     resourceType: file.resourceType,
@@ -81,24 +86,76 @@ export async function GET(
     req,
     allowed: true,
   });
-  const absPath = path.join(process.cwd(), "uploads", file.storagePath);
+
+  // Check if client sent a Range header (video streaming)
+  const rangeHeader = req.headers.get("range");
+
+  // For non-range requests (downloads), generate a short-lived signed URL
+  // and redirect to it. The signed URL has 5-min TTL — even if forwarded,
+  // it expires quickly.
+  if (!rangeHeader) {
+    const signed = await createSignedDownloadUrl(file.storagePath, 300);
+    if (!signed) {
+      return NextResponse.json({ error: "Failed to generate download URL" }, { status: 500 });
+    }
+    return NextResponse.redirect(signed.url, 302, {
+      "Cache-Control": "no-store, no-cache, must-revalidate, private, max-age=0",
+      "X-Content-Type-Options": "nosniff",
+      "Cross-Origin-Resource-Policy": "same-origin",
+    });
+  }
+
+  // For range requests (video streaming), proxy bytes from Supabase
+  // so the <video> element can seek properly
   try {
-    const bytes = await readFile(absPath);
-    // Force inline display but disable download attribute (browser will still respect Content-Disposition)
-    // Set Cache-Control: no-store so the URL doesn't get cached/shared
+    const sb = getSupabaseServer();
+    // Parse Range header
+    const match = rangeHeader.match(/bytes=(\d*)-(\d*)/);
+    const startStr = match?.[1] ?? "";
+    const endStr = match?.[2] ?? "";
+    // Get file info first
+    const { data: fileInfo } = await sb.storage
+      .from("coaching-uploads")
+      .info(file.storagePath);
+    const totalSize = (fileInfo as unknown as { metadata?: { size?: number } })?.metadata?.size ?? file.size;
+    const start = startStr ? parseInt(startStr, 10) : 0;
+    const end = endStr ? parseInt(endStr, 10) : totalSize - 1;
+    const chunkSize = end - start + 1;
+    // Download the range chunk
+    const { data, error } = await sb.storage
+      .from("coaching-uploads")
+      .download(file.storagePath, {
+        transform: { range: { start, end } },
+      });
+    if (error || !data) {
+      // Fallback to signed URL
+      const signed = await createSignedDownloadUrl(file.storagePath, 300);
+      if (!signed) {
+        return NextResponse.json({ error: "Failed to load file" }, { status: 500 });
+      }
+      return NextResponse.redirect(signed.url, 302);
+    }
+    const bytes = new Uint8Array(await data.arrayBuffer());
     return new NextResponse(bytes, {
-      status: 200,
+      status: 206, // Partial Content
       headers: {
         "Content-Type": file.mimeType || "application/octet-stream",
-        "Content-Length": String(bytes.byteLength),
+        "Content-Length": String(chunkSize),
+        "Content-Range": `bytes ${start}-${end}/${totalSize}`,
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "no-store, no-cache, must-revalidate, private, max-age=0",
         "Content-Disposition": `inline; filename="${file.originalName.replace(/"/g, "'")}"`,
-        "Cache-Control": "no-store, no-cache, must-revalidate, private",
         "X-Content-Type-Options": "nosniff",
-        "X-Frame-Options": "SAMEORIGIN",
         "Cross-Origin-Resource-Policy": "same-origin",
       },
     });
-  } catch {
-    return NextResponse.json({ error: "File missing on disk" }, { status: 500 });
+  } catch (err) {
+    console.error("Stream error:", err);
+    // Fallback to signed URL
+    const signed = await createSignedDownloadUrl(file.storagePath, 300);
+    if (!signed) {
+      return NextResponse.json({ error: "Failed to load file" }, { status: 500 });
+    }
+    return NextResponse.redirect(signed.url, 302);
   }
 }

@@ -8,7 +8,7 @@
   "crons": [
     {
       "path": "/api/cron/cleanup?secret=${CRON_SECRET}",
-      "schedule": "0 * * * *"
+      "schedule": "0 0 * * *"
     }
   ]
 }

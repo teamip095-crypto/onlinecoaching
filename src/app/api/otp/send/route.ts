@@ -28,9 +28,9 @@ export async function POST(req: Request) {
   if (!user) {
     return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
-  const { code, expiresAt } = generateOtp(session.user.id, purpose, refId);
+  const { code, expiresAt } = await generateOtp(session.user.id, purpose, refId);
   // Try to send via WhatsApp
-  const sent = await sendOtpWhatsapp(user.phone, code, purpose);
+  const sent = await sendOtpWhatsapp(user.phone, code, purpose, session.user.id);
   // In dev, return the OTP for testing (REMOVE in production)
   const isDev = process.env.NODE_ENV !== "production";
   return NextResponse.json({

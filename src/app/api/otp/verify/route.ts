@@ -18,7 +18,7 @@ export async function POST(req: Request) {
   if (!code || !/^\d{6}$/.test(String(code))) {
     return NextResponse.json({ error: "OTP must be 6 digits" }, { status: 400 });
   }
-  const r = verifyOtp(session.user.id, purpose, refId, String(code));
+  const r = await verifyOtp(session.user.id, purpose, refId, String(code));
   if (!r.ok) {
     return NextResponse.json(
       { error: "OTP verification failed", code: r.reason },

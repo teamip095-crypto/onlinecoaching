@@ -4,5 +4,11 @@
   "installCommand": "bun install",
   "outputDirectory": ".next",
   "regions": ["hkg1"],
-  "version": 2
+  "version": 2,
+  "crons": [
+    {
+      "path": "/api/cron/cleanup?secret=${CRON_SECRET}",
+      "schedule": "0 * * * *"
+    }
+  ]
 }

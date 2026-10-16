@@ -1,9 +1,10 @@
 import { db } from "./db";
+import bcrypt from "bcryptjs";
 import crypto from "crypto";
 
-// In-memory OTP store (production: use Redis or DB table)
-// Map<key, { code: string, expiresAt: number, attempts: number, verified: boolean }>
-const otpStore = new Map<string, { code: string; expiresAt: number; attempts: number; verified: boolean }>();
+// OTP system — DB-backed (survives server restarts, works across instances)
+// Stores bcrypt hash of OTP code (never plaintext)
+// 5-minute expiry, max 5 attempts, single-use
 
 const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_ATTEMPTS = 5;
@@ -14,107 +15,149 @@ export function makeOtpKey(userId: string, purpose: OtpPurpose, refId?: string) 
   return `otp:${userId}:${purpose}:${refId ?? ""}`;
 }
 
-export function generateOtp(userId: string, purpose: OtpPurpose, refId?: string): {
-  code: string;
-  expiresAt: number;
-} {
-  // 6-digit code
+export async function generateOtp(
+  userId: string,
+  purpose: OtpPurpose,
+  refId?: string
+): Promise<{ code: string; expiresAt: number }> {
   const code = String(crypto.randomInt(0, 1000000)).padStart(6, "0");
-  const expiresAt = Date.now() + OTP_TTL_MS;
-  const key = makeOtpKey(userId, purpose, refId);
-  otpStore.set(key, { code, expiresAt, attempts: 0, verified: false });
-  return { code, expiresAt };
+  const codeHash = await bcrypt.hash(code, 10); // lower cost than user password (10 rounds)
+  const expiresAt = new Date(Date.now() + OTP_TTL_MS);
+  // Upsert: replace any existing OTP for same key+purpose+refId
+  await db.otpToken.upsert({
+    where: {
+      userId_purpose_refId: {
+        userId,
+        purpose,
+        refId: refId ?? null as any,
+      },
+    } as any,
+    update: {
+      codeHash,
+      attempts: 0,
+      verified: false,
+      expiresAt,
+    },
+    create: {
+      userId,
+      purpose,
+      refId: refId ?? null as any,
+      codeHash,
+      attempts: 0,
+      verified: false,
+      expiresAt,
+    },
+  });
+  return { code, expiresAt: expiresAt.getTime() };
 }
 
-export function verifyOtp(
+export async function verifyOtp(
   userId: string,
   purpose: OtpPurpose,
   refId: string | undefined,
   inputCode: string
-): { ok: boolean; reason?: string } {
-  const key = makeOtpKey(userId, purpose, refId);
-  const entry = otpStore.get(key);
-  if (!entry) {
+): Promise<{ ok: boolean; reason?: string }> {
+  const token = await db.otpToken.findUnique({
+    where: {
+      userId_purpose_refId: {
+        userId,
+        purpose,
+        refId: refId ?? null as any,
+      },
+    } as any,
+  });
+  if (!token) {
     return { ok: false, reason: "OTP_EXPIRED_OR_NOT_SENT" };
   }
-  if (Date.now() > entry.expiresAt) {
-    otpStore.delete(key);
+  if (Date.now() > token.expiresAt.getTime()) {
+    await db.otpToken.delete({ where: { id: token.id } }).catch(() => {});
     return { ok: false, reason: "OTP_EXPIRED" };
   }
-  if (entry.verified) {
+  if (token.verified) {
     return { ok: false, reason: "OTP_ALREADY_USED" };
   }
-  if (entry.attempts >= MAX_ATTEMPTS) {
-    otpStore.delete(key);
+  if (token.attempts >= MAX_ATTEMPTS) {
+    await db.otpToken.delete({ where: { id: token.id } }).catch(() => {});
     return { ok: false, reason: "TOO_MANY_ATTEMPTS" };
   }
-  entry.attempts += 1;
-  if (!crypto.timingSafeEqual(
-    Buffer.from(entry.code),
-    Buffer.from(inputCode.padEnd(entry.code.length, " "))
-  )) {
+  // Increment attempts
+  await db.otpToken.update({
+    where: { id: token.id },
+    data: { attempts: { increment: 1 } },
+  });
+  const ok = await bcrypt.compare(inputCode, token.codeHash);
+  if (!ok) {
     return { ok: false, reason: "INVALID_OTP" };
   }
-  entry.verified = true;
+  await db.otpToken.update({
+    where: { id: token.id },
+    data: { verified: true },
+  });
   return { ok: true };
 }
 
-// Single-device session enforcement.
-// On each successful login, we mark the previous session token as superseded.
-// When the next request comes with the old token, we check if it's still the
-// active one. If not, the user is force-logged-out from the old device.
-
-const activeSessionByUser = new Map<string, string>(); // userId → active session token (hashed)
-
-export function setActiveSession(userId: string, sessionTokenHash: string) {
-  activeSessionByUser.set(userId, sessionTokenHash);
+// Cleanup expired OTPs — called by cron job
+export async function cleanupExpiredOtps(): Promise<{ deleted: number }> {
+  const result = await db.otpToken.deleteMany({
+    where: { expiresAt: { lt: new Date() } },
+  });
+  return { deleted: result.count };
 }
 
-export function isActiveSession(userId: string, sessionTokenHash: string): boolean {
-  const active = activeSessionByUser.get(userId);
-  if (!active) return true; // no record means allow (first session after restart)
-  return active === sessionTokenHash;
-}
+// Single-device session enforcement (DB-backed, persistent across restarts)
+// On login: revoke all previous sessions for user, create new one.
+// On each request: check if the request's token matches the latest active session.
 
-export function revokeAllSessions(userId: string) {
-  activeSessionByUser.delete(userId);
-}
-
-// Persist active session to DB so it survives restarts
-export async function persistActiveSession(userId: string, token: string) {
+export async function persistSession(
+  userId: string,
+  token: string,
+  meta?: { userAgent?: string; ipAddress?: string }
+): Promise<void> {
   const hashed = hashToken(token);
-  setActiveSession(userId, hashed);
-  // Mark older sessions as revoked
+  // Revoke all previous sessions
   await db.userSession.updateMany({
     where: { userId, revokedAt: null },
     data: { revokedAt: new Date() },
   });
+  // Create new active session
   await db.userSession.create({
     data: {
       userId,
       token: hashed,
-      userAgent: "unknown",
-      ipAddress: "unknown",
+      userAgent: meta?.userAgent ?? "unknown",
+      ipAddress: meta?.ipAddress ?? "unknown",
       expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
     },
   });
 }
 
-export async function checkSessionValid(userId: string, token: string): Promise<boolean> {
+export async function isSessionValid(userId: string, token: string): Promise<boolean> {
   const hashed = hashToken(token);
-  const inMemory = isActiveSession(userId, hashed);
-  if (!inMemory) {
-    // Check DB — the most recent non-revoked session for this user
-    const sess = await db.userSession.findFirst({
-      where: { userId, revokedAt: null, token: hashed },
-      orderBy: { createdAt: "desc" },
-    });
-    if (!sess) return false;
-    // Promote to in-memory cache
-    setActiveSession(userId, hashed);
-    return true;
-  }
-  return true;
+  const sess = await db.userSession.findFirst({
+    where: {
+      userId,
+      token: hashed,
+      revokedAt: null,
+      expiresAt: { gt: new Date() },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  return !!sess;
+}
+
+export async function revokeAllSessions(userId: string): Promise<void> {
+  await db.userSession.updateMany({
+    where: { userId, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+}
+
+// Cleanup expired sessions
+export async function cleanupExpiredSessions(): Promise<{ deleted: number }> {
+  const result = await db.userSession.deleteMany({
+    where: { expiresAt: { lt: new Date() } },
+  });
+  return { deleted: result.count };
 }
 
 function hashToken(token: string): string {
@@ -128,7 +171,7 @@ export function generateLicenseKey(userId: string, fileId: string): {
   licenseKey: string;
   expiresAt: number;
 } {
-  const secret = process.env.NEXTAUTH_SECRET ?? "fallback-license-secret";
+  const secret = requireSecret();
   const ttl = 24 * 3600 * 1000; // 24 hours
   const expiresAt = Date.now() + ttl;
   const data = `${userId}|${fileId}|${expiresAt}`;
@@ -148,8 +191,7 @@ export function verifyLicenseKey(
     const expiresAt = Number(expiresAtStr);
     if (!userId || !fileId || !expiresAt || !sig) return null;
     if (Date.now() > expiresAt) return null;
-    const secret = process.env.NEXTAUTH_SECRET;
-    if (!secret) return null;
+    const secret = requireSecret();
     const data = `${userId}|${fileId}|${expiresAt}`;
     const expectedSig = crypto.createHmac("sha256", secret).update(data).digest("hex").slice(0, 24);
     if (sig !== expectedSig) return null;
@@ -158,3 +200,43 @@ export function verifyLicenseKey(
     return null;
   }
 }
+
+function requireSecret(): string {
+  const s = process.env.NEXTAUTH_SECRET;
+  if (!s) {
+    throw new Error(
+      "NEXTAUTH_SECRET environment variable is required. Refusing to use weak security."
+    );
+  }
+  return s;
+}
+
+// DB-backed rate limiting (works across server instances)
+export async function checkRateLimit(key: string): Promise<{ ok: boolean; retryAfter?: number }> {
+  const rl = await db.rateLimit.findUnique({ where: { bucket: key } });
+  if (!rl) return { ok: true };
+  if (rl.lockedUntil && rl.lockedUntil > new Date()) {
+    return { ok: false, retryAfter: Math.ceil((rl.lockedUntil.getTime() - Date.now()) / 1000) };
+  }
+  return { ok: true };
+}
+
+export async function recordFailedLogin(key: string): Promise<void> {
+  const rl = await db.rateLimit.upsert({
+    where: { bucket: key },
+    update: { attempts: { increment: 1 } },
+    create: { bucket: key, attempts: 1 },
+  });
+  if (rl.attempts >= MAX_LOGIN_ATTEMPTS) {
+    await db.rateLimit.update({
+      where: { bucket: key },
+      data: { lockedUntil: new Date(Date.now() + 15 * 60 * 1000) }, // 15min lockout
+    });
+  }
+}
+
+export async function clearLoginAttempts(key: string): Promise<void> {
+  await db.rateLimit.delete({ where: { bucket: key } }).catch(() => {});
+}
+
+const MAX_LOGIN_ATTEMPTS = 5;

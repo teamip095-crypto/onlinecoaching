@@ -7,7 +7,7 @@ export async function POST(req: Request) {
   try {
     const ip =
       req.headers.get("x-forwarded-for") ?? "unknown";
-    const rate = checkRateLimit(`register:${ip}`);
+    const rate = await checkRateLimit(`register:${ip}`);
     if (!rate.ok) {
       return NextResponse.json(
         { error: `Too many attempts. Try again in ${rate.retryAfter}s` },
@@ -48,7 +48,7 @@ export async function POST(req: Request) {
       where: { OR: [{ email: email.toLowerCase() }, { phone }] },
     });
     if (exists) {
-      recordFailedLogin(`register:${ip}`);
+      await recordFailedLogin(`register:${ip}`);
       return NextResponse.json(
         { error: "Email or phone already registered" },
         { status: 409 }

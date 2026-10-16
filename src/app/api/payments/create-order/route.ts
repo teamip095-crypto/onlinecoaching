@@ -3,11 +3,12 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { authOptions } from "@/lib/auth";
 import { logAccess } from "@/lib/access";
+import { createOrder, isRazorpayConfigured } from "@/lib/razorpay-server";
 
 // POST /api/payments/create-order
 // Body: { courseId: string }
-// Creates a Payment record with status CREATED and returns a mock provider order
-// (In production: integrate Razorpay/Stripe order API)
+// Creates a Payment record with status CREATED and returns Razorpay order
+// If Razorpay env vars are not set, falls back to demo order ID.
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
@@ -37,7 +38,12 @@ export async function POST(req: Request) {
     });
   }
   const receipt = `rcpt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const providerOrderId = `order_demo_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  // Create Razorpay order (or demo if not configured)
+  const order = await createOrder({
+    amountPaise: course.price,
+    receipt,
+    notes: { courseId, courseTitle: course.title, userId: session.user.id },
+  });
   const payment = await db.payment.create({
     data: {
       userId: session.user.id,
@@ -45,7 +51,7 @@ export async function POST(req: Request) {
       amount: course.price,
       status: "CREATED",
       provider: "RAZORPAY",
-      providerOrderId,
+      providerOrderId: order.providerOrderId,
       receipt,
       notes: `Enrollment: ${course.title}`,
     },
@@ -58,16 +64,18 @@ export async function POST(req: Request) {
     req,
     allowed: true,
   });
-  // Mock provider response (in production, return razorpay_order_id etc.)
   return NextResponse.json({
     paymentId: payment.id,
-    providerOrderId,
-    amount: course.price,
-    currency: "INR",
-    receipt,
+    providerOrderId: order.providerOrderId,
+    amount: order.amountPaise,
+    currency: order.currency,
+    receipt: order.receipt,
     courseTitle: course.title,
-    // Demo "key" — in production this would be razorpay_key_id
-    keyId: "demo_key",
-    notes: "Demo payment gateway (no real money charged)",
+    // Razorpay key ID (only if real Razorpay configured; otherwise demo)
+    keyId: process.env.RAZORPAY_KEY_ID ?? "demo_key",
+    razorpayConfigured: isRazorpayConfigured(),
+    notes: isRazorpayConfigured()
+      ? "Razorpay order created — real payment gateway"
+      : "Demo payment gateway (set RAZORPAY_KEY_ID + RAZORPAY_KEY_SECRET for real payments)",
   });
 }

@@ -3,10 +3,10 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { authOptions } from "@/lib/auth";
 import { logAccess } from "@/lib/access";
-import crypto from "crypto";
 import { generateOtp } from "@/lib/otp";
 import { sendOtpWhatsapp, sendInvoiceWhatsapp } from "@/lib/whatsapp";
 import { buildInvoice, invoiceToText, generateInvoiceNumber } from "@/lib/invoice";
+import { verifyPaymentSignature } from "@/lib/razorpay-server";
 
 // POST /api/payments/verify
 // Body: { paymentId: string, providerPaymentId: string, providerSignature: string }
@@ -45,20 +45,13 @@ export async function POST(req: Request) {
       courseId: payment.courseId,
     });
   }
-  // Demo "signature verification" — in production: compare against HMAC
-  // of (providerOrderId|providerPaymentId) using Razorpay key_secret
-  const secret = process.env.NEXTAUTH_SECRET;
-  if (!secret) {
-    return NextResponse.json(
-      { error: "Server not configured (NEXTAUTH_SECRET missing)" },
-      { status: 500 }
-    );
-  }
-  const expectedSig = makeSig(
-    `${payment.providerOrderId}|${providerPaymentId}`,
-    secret
-  );
-  if (providerSignature !== expectedSig && providerSignature !== "demo_signature") {
+  // Verify payment signature using Razorpay SDK (or demo mode if not configured)
+  const sigOk = verifyPaymentSignature({
+    providerOrderId: payment.providerOrderId ?? "",
+    providerPaymentId,
+    providerSignature,
+  });
+  if (!sigOk) {
     await db.payment.update({
       where: { id: payment.id },
       data: { status: "FAILED", providerPaymentId, providerSignature },
@@ -148,7 +141,7 @@ export async function POST(req: Request) {
       amount: invoice.amountRupees,
       studentName: invoice.studentName,
       date: invoice.date,
-    }).catch(() => {});
+    }, session.user.id).catch(() => {});
     // Also store the invoice text on the payment record (notes column)
     await db.payment.update({
       where: { id: payment.id },
@@ -158,8 +151,8 @@ export async function POST(req: Request) {
 
   // Send OTP for device verification (next step after payment)
   if (student) {
-    const { code, expiresAt } = generateOtp(session.user.id, "PAYMENT", payment.id);
-    await sendOtpWhatsapp(student.phone, code, "Activate Enrollment").catch(() => {});
+    const { code } = await generateOtp(session.user.id, "PAYMENT", payment.id);
+    await sendOtpWhatsapp(student.phone, code, "Activate Enrollment", session.user.id).catch(() => {});
   }
 
   await logAccess({
@@ -178,12 +171,4 @@ export async function POST(req: Request) {
     otpRequired: true,
     paymentId: payment.id,
   });
-}
-
-function makeSig(data: string, secret: string): string {
-  return crypto
-    .createHmac("sha256", secret)
-    .update(data)
-    .digest("hex")
-    .slice(0, 16);
 }

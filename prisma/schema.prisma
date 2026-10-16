@@ -176,6 +176,48 @@ model UploadedFile {
   createdAt    DateTime @default(now())
 }
 
+// OTP tokens — persistent across server restarts (replaces in-memory store)
+model OtpToken {
+  id           String   @id @default(cuid())
+  userId       String
+  purpose      String   // PAYMENT | DEVICE_VERIFY | DOUBT_REPLY
+  refId        String?  // paymentId, deviceId, etc.
+  codeHash     String   // bcrypt hash of the OTP code (never store plaintext)
+  attempts     Int      @default(0)
+  verified     Boolean  @default(false)
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  @@unique([userId, purpose, refId])
+  @@index([expiresAt])
+}
+
+// Rate limit entries — persistent across server restarts
+model RateLimit {
+  id           String   @id @default(cuid())
+  bucket       String   @unique // e.g. "login:user@example.com"
+  attempts     Int      @default(0)
+  lockedUntil  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// WhatsApp message delivery log
+model WhatsappLog {
+  id           String   @id @default(cuid())
+  userId       String?
+  toPhone      String
+  messageBody  String
+  messageId    String?  // WhatsApp API message ID (null if not sent)
+  status       String   @default("PENDING") // PENDING | SENT | FAILED | SKIPPED
+  error        String?
+  purpose      String?  // OTP | INVOICE | NOTIFICATION
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
 model Test {
   id           String   @id @default(cuid())
   courseId      String

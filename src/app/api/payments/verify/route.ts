@@ -27,7 +27,7 @@ export async function POST(req: Request) {
   }
   const payment = await db.payment.findUnique({
     where: { id: paymentId },
-    include: { course: { select: { id: true, title: true } } },
+    include: { course: { select: { id: true, title: true } } } as any,
   });
   if (!payment) {
     return NextResponse.json({ error: "Payment not found" }, { status: 404 });
@@ -117,7 +117,7 @@ export async function POST(req: Request) {
     data: {
       userId: session.user.id,
       title: "Payment Successful",
-      message: `Your enrollment for ${payment.course?.title ?? "course"} is now active. Welcome aboard!`,
+      message: `Your enrollment for ${(payment as any).course?.title ?? "course"} is now active. Welcome aboard!`,
       type: "PAYMENT",
     },
   });
@@ -133,7 +133,7 @@ export async function POST(req: Request) {
       studentName: student.name ?? "Student",
       studentEmail: student.email,
       studentPhone: student.phone,
-      courseTitle: payment.course?.title ?? "Course",
+      courseTitle: (payment as any).course?.title ?? "Course",
       courseId: payment.courseId ?? "unknown",
       amountPaise: payment.amount,
       transactionId: providerPaymentId,
@@ -142,7 +142,13 @@ export async function POST(req: Request) {
     invoiceNumber = invoice.number;
     const invoiceText = invoiceToText(invoice);
     // Best-effort send via WhatsApp (no-op if env not configured)
-    await sendInvoiceWhatsapp(student.phone, invoice).catch(() => {});
+    await sendInvoiceWhatsapp(student.phone, {
+      number: invoice.number,
+      courseTitle: invoice.courseTitle,
+      amount: invoice.amountRupees,
+      studentName: invoice.studentName,
+      date: invoice.date,
+    }).catch(() => {});
     // Also store the invoice text on the payment record (notes column)
     await db.payment.update({
       where: { id: payment.id },

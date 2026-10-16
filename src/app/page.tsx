@@ -118,9 +118,14 @@ export default function Home() {
   useEffect(() => {
     if (!session?.user) return;
     let active = true;
-    let p: Promise<void> = Promise.resolve();
-    const run = () => {
-      p = p.then(() => active && loadNotifications()).then(() => active && loadEnrollments()).catch(() => {});
+    const run = async () => {
+      try {
+        await loadNotifications();
+        if (!active) return;
+        await loadEnrollments();
+      } catch {
+        // best-effort
+      }
     };
     run();
     return () => {

@@ -45,7 +45,7 @@ export type StudyMaterial = {
   type: "pdf" | "video" | "note" | "dpp";
   subject: string;
   faculty: string;
-  size: string;
+  size?: string;
   duration?: string;
   uploadedAt: string;
   isNew?: boolean;
@@ -554,6 +554,7 @@ export const userProfile = {
 
 // Stats for dashboard
 export const dashboardStats = {
+  streak: 23,
   todayClasses: 5,
   liveNow: 1,
   pendingTests: 2,

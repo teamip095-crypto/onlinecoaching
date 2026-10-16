@@ -132,7 +132,7 @@ export function ContentGuard({ children, onDevtoolsOpen, blurOnDevtools = true }
   }, []);
 
   // 6c. Canvas tamper detection — if someone tries to render our content
-  // to a canvas (for screenshot bypass), paint a watermark on the canvas
+  // to a canvas (for screenshot bypass), block the capture
   useEffect(() => {
     const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
     const origToBlob = HTMLCanvasElement.prototype.toBlob;
@@ -140,9 +140,7 @@ export function ContentGuard({ children, onDevtoolsOpen, blurOnDevtools = true }
     const block = () => {
       throw new Error("Canvas capture disabled for content protection");
     };
-    HTMLCanvasElement.prototype.toDataURL = function (...args: unknown[]) {
-      // Allow blank canvases (used by Next.js dev), but block any canvas that
-      // has been drawn on (likely content capture attempts)
+    HTMLCanvasElement.prototype.toDataURL = function (this: HTMLCanvasElement, ...args: unknown[]) {
       try {
         const ctx = this.getContext("2d");
         if (ctx) {
@@ -154,9 +152,9 @@ export function ContentGuard({ children, onDevtoolsOpen, blurOnDevtools = true }
       } catch {
         block();
       }
-      return origToDataURL.apply(this, args as [unknown, ...unknown[]]);
+      return origToDataURL.apply(this, args as [string?, number?]);
     } as typeof HTMLCanvasElement.prototype.toDataURL;
-    HTMLCanvasElement.prototype.toBlob = function (...args: unknown[]) {
+    HTMLCanvasElement.prototype.toBlob = function (this: HTMLCanvasElement, ...args: unknown[]) {
       try {
         const ctx = this.getContext("2d");
         if (ctx) {
@@ -166,12 +164,12 @@ export function ContentGuard({ children, onDevtoolsOpen, blurOnDevtools = true }
       } catch {
         block();
       }
-      return origToBlob.apply(this, args as [unknown, ...unknown[]]);
+      return origToBlob.apply(this, args as [(b: Blob | null) => void, string?]);
     } as typeof HTMLCanvasElement.prototype.toBlob;
     if (origCaptureStream) {
-      HTMLCanvasElement.prototype.captureStream = function (...args: unknown[]) {
+      HTMLCanvasElement.prototype.captureStream = function (this: HTMLCanvasElement, ...args: unknown[]) {
         block();
-        return origCaptureStream.apply(this, args as [unknown, ...unknown[]]);
+        return origCaptureStream.apply(this, args as [number?]);
       } as typeof HTMLCanvasElement.prototype.captureStream;
     }
     return () => {
@@ -201,25 +199,18 @@ export function ContentGuard({ children, onDevtoolsOpen, blurOnDevtools = true }
 
   // 9. Screen-capture detection
   useEffect(() => {
-    let stream: MediaStream | null = null;
     let active = true;
-    // We can't actively detect screen recording software, but if this tab
-    // starts sharing its own screen, we can warn.
-    if (navigator.mediaDevices?.getDisplayMedia) {
-      // no-op — we just listen for visibility change instead
-    }
     // 10. Visibility change — pause/blur content when tab hidden
     const onVis = () => {
       if (document.hidden) {
         setScreenshotWarning(true);
-        setTimeout(() => active && setScreenshotWarning(false), 1500);
+        setTimeout(() => { if (active) setScreenshotWarning(false); }, 1500);
       }
     };
     document.addEventListener("visibilitychange", onVis);
     return () => {
       active = false;
       document.removeEventListener("visibilitychange", onVis);
-      stream?.getTracks().forEach((t) => t.stop());
     };
   }, []);
 

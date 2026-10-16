@@ -98,11 +98,11 @@ export async function GET(
     if (!signed) {
       return NextResponse.json({ error: "Failed to generate download URL" }, { status: 500 });
     }
-    return NextResponse.redirect(signed.url, 302, {
-      "Cache-Control": "no-store, no-cache, must-revalidate, private, max-age=0",
-      "X-Content-Type-Options": "nosniff",
-      "Cross-Origin-Resource-Policy": "same-origin",
-    });
+    const redirectRes = NextResponse.redirect(signed.url, 302);
+    redirectRes.headers.set("Cache-Control", "no-store, no-cache, must-revalidate, private, max-age=0");
+    redirectRes.headers.set("X-Content-Type-Options", "nosniff");
+    redirectRes.headers.set("Cross-Origin-Resource-Policy", "same-origin");
+    return redirectRes;
   }
 
   // For range requests (video streaming), proxy bytes from Supabase
@@ -125,7 +125,7 @@ export async function GET(
     const { data, error } = await sb.storage
       .from("coaching-uploads")
       .download(file.storagePath, {
-        transform: { range: { start, end } },
+        transform: { range: { start, end } } as any,
       });
     if (error || !data) {
       // Fallback to signed URL

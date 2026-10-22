@@ -3,12 +3,23 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { authOptions } from "@/lib/auth";
 import { logAccess } from "@/lib/access";
-import { createOrder, isRazorpayConfigured } from "@/lib/razorpay-server";
+import crypto from "crypto";
 
 // POST /api/payments/create-order
 // Body: { courseId: string }
-// Creates a Payment record with status CREATED and returns Razorpay order
-// If Razorpay env vars are not set, falls back to demo order ID.
+//
+// UPI QR-based payment (no Razorpay/gateway SDK needed):
+// 1. Server creates Payment record with status=CREATED
+// 2. Returns UPI deep link for QR code (pa=9301056006@upi&am=AMOUNT)
+// 3. Student scans QR with any UPI app (GPay/PhonePe/Paytm/BHIM)
+// 4. Student pays externally, gets UTR (transaction ID)
+// 5. Student submits UTR to /api/payments/verify
+// 6. Server verifies signature + activates enrollment
+
+const PLATFORM_UPI_NUMBER = "9301056006";
+const PLATFORM_UPI_ID = `${PLATFORM_UPI_NUMBER}@upi`;
+const PLATFORM_PAYEE_NAME = "OnlineCoaching";
+
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
@@ -38,20 +49,16 @@ export async function POST(req: Request) {
     });
   }
   const receipt = `rcpt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  // Create Razorpay order (or demo if not configured)
-  const order = await createOrder({
-    amountPaise: course.price,
-    receipt,
-    notes: { courseId, courseTitle: course.title, userId: session.user.id },
-  });
+  // Generate a unique order ID for this payment (no external API call)
+  const providerOrderId = `order_upi_${Date.now()}_${crypto.randomBytes(6).toString("hex")}`;
   const payment = await db.payment.create({
     data: {
       userId: session.user.id,
       courseId,
       amount: course.price,
       status: "CREATED",
-      provider: "RAZORPAY",
-      providerOrderId: order.providerOrderId,
+      provider: "UPI_QR",
+      providerOrderId,
       receipt,
       notes: `Enrollment: ${course.title}`,
     },
@@ -64,18 +71,24 @@ export async function POST(req: Request) {
     req,
     allowed: true,
   });
+  // Build UPI deep link for QR code
+  // upi://pay?pa=UPI_ID&pn=PAYEE_NAME&am=AMOUNT&cu=INR&tn=NOTE&tr=RECEIPT
+  const amountRupees = (course.price / 100).toFixed(2);
+  const note = `Course: ${course.title.slice(0, 30)}`;
+  const upiDeepLink = `upi://pay?pa=${encodeURIComponent(PLATFORM_UPI_ID)}&pn=${encodeURIComponent(PLATFORM_PAYEE_NAME)}&am=${amountRupees}&cu=INR&tn=${encodeURIComponent(note)}&tr=${encodeURIComponent(receipt)}`;
   return NextResponse.json({
     paymentId: payment.id,
-    providerOrderId: order.providerOrderId,
-    amount: order.amountPaise,
-    currency: order.currency,
-    receipt: order.receipt,
+    providerOrderId,
+    amount: course.price,
+    amountRupees: course.price / 100,
+    currency: "INR",
+    receipt,
     courseTitle: course.title,
-    // Razorpay key ID (only if real Razorpay configured; otherwise demo)
-    keyId: process.env.RAZORPAY_KEY_ID ?? "demo_key",
-    razorpayConfigured: isRazorpayConfigured(),
-    notes: isRazorpayConfigured()
-      ? "Razorpay order created — real payment gateway"
-      : "Demo payment gateway (set RAZORPAY_KEY_ID + RAZORPAY_KEY_SECRET for real payments)",
+    // UPI QR payment details (no gateway SDK)
+    upiId: PLATFORM_UPI_ID,
+    upiNumber: PLATFORM_UPI_NUMBER,
+    payeeName: PLATFORM_PAYEE_NAME,
+    upiDeepLink, // encode this in a QR code
+    notes: "Scan the QR with any UPI app (GPay/PhonePe/Paytm/BHIM) to pay. After payment, enter the UTR.",
   });
 }

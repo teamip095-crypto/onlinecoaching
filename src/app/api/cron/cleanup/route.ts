@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import { cleanupExpiredOtps, cleanupExpiredSessions } from "@/lib/otp";
-import { retryFailedWhatsapp } from "@/lib/whatsapp";
+import { retryFailedEmails } from "@/lib/email";
 import { db } from "@/lib/db";
 
 // GET /api/cron/cleanup - scheduled cleanup of expired OTPs, sessions, rate limits
 // Protected by CRON_SECRET env var (set in Vercel cron config)
-// Schedule: every hour
+// Schedule: daily (Hobby plan limit)
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const secret = url.searchParams.get("secret");
@@ -25,13 +25,13 @@ export async function GET(req: Request) {
     },
   });
   results.oldRateLimits = { deleted: oldRateLimits.count };
-  // 4. Cleanup old Whatsapp logs (>30 days)
-  const oldWhatsappLogs = await db.whatsappLog.deleteMany({
+  // 4. Cleanup old email logs (>30 days)
+  const oldEmailLogs = await db.whatsappLog.deleteMany({
     where: { createdAt: { lt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } },
   });
-  results.oldWhatsappLogs = { deleted: oldWhatsappLogs.count };
-  // 5. Retry failed WhatsApp sends (best effort)
-  results.whatsappRetries = await retryFailedWhatsapp(20);
+  results.oldEmailLogs = { deleted: oldEmailLogs.count };
+  // 5. Retry failed email sends (best effort)
+  results.emailRetries = await retryFailedEmails(20);
   // 6. Cleanup old access logs (>90 days)
   const oldAccessLogs = await db.accessLog.deleteMany({
     where: { createdAt: { lt: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000) } },

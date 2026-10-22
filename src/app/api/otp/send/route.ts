@@ -2,12 +2,12 @@ import { getServerSession } from "next-auth";
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { authOptions } from "@/lib/auth";
-import { generateOtp, type OtpPurpose } from "@/lib/otp";
-import { sendOtpWhatsapp } from "@/lib/whatsapp";
+import { generateOtp, checkRateLimit, recordFailedLogin, type OtpPurpose } from "@/lib/otp";
+import { sendOtpEmail, isEmailConfigured } from "@/lib/email";
 
 // POST /api/otp/send
-// Body: { purpose: "PAYMENT" | "DEVICE_VERIFY", refId?: string }
-// Sends OTP to the user's phone (via WhatsApp if env configured, else just returns ok)
+// Body: { purpose: "PAYMENT" | "DEVICE_VERIFY" | "DOUBT_REPLY", refId?: string }
+// Sends OTP to the user's EMAIL (via Resend, free 3000/month)
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
@@ -19,8 +19,15 @@ export async function POST(req: Request) {
   if (!["PAYMENT", "DEVICE_VERIFY", "DOUBT_REPLY"].includes(purpose)) {
     return NextResponse.json({ error: "Invalid purpose" }, { status: 400 });
   }
-  // Rate limit: max 1 OTP per 30s per user+purpose
-  // (production: use Redis)
+  // Rate limit: max 1 OTP request per 30s per user+purpose
+  const rateKey = `otp:${session.user.id}:${purpose}`;
+  const rate = await checkRateLimit(rateKey);
+  if (!rate.ok) {
+    return NextResponse.json(
+      { error: `Too many OTP requests. Try again in ${rate.retryAfter}s` },
+      { status: 429 }
+    );
+  }
   const user = await db.user.findUnique({
     where: { id: session.user.id },
     select: { phone: true, name: true, email: true },
@@ -28,18 +35,22 @@ export async function POST(req: Request) {
   if (!user) {
     return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
+  if (!user.email) {
+    return NextResponse.json({ error: "No email on file for OTP" }, { status: 400 });
+  }
   const { code, expiresAt } = await generateOtp(session.user.id, purpose, refId);
-  // Try to send via WhatsApp
-  const sent = await sendOtpWhatsapp(user.phone, code, purpose, session.user.id);
-  // In dev, return the OTP for testing (REMOVE in production)
-  const isDev = process.env.NODE_ENV !== "production";
+  // Send OTP via EMAIL
+  const sent = await sendOtpEmail(user.email, code, purpose, user.name ?? undefined, session.user.id);
+  // In dev mode (no RESEND_API_KEY), return the code for testing
+  const isDev = process.env.NODE_ENV !== "production" || !isEmailConfigured();
   return NextResponse.json({
     ok: true,
-    sentViaWhatsapp: sent,
+    sentViaEmail: sent,
+    emailConfigured: isEmailConfigured(),
     expiresAt,
     ...(isDev ? { devCode: code } : {}),
-    message: sent
-      ? "OTP sent to your WhatsApp number"
-      : "OTP generated (configure WhatsApp env to actually send)",
+    message: sent && isEmailConfigured()
+      ? `OTP sent to ${user.email}`
+      : "OTP generated. Set RESEND_API_KEY to actually send emails.",
   });
 }
